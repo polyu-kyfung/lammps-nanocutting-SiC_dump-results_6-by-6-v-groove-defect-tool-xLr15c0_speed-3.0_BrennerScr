@@ -1,0 +1,280 @@
+# Input file for nanocutting of Cubic SiC with a diamond tool
+# Chris Fung, Apr 2019
+#package cuda gpu/node 1 0
+#package omp 2 force/neigh
+# ------------------------ INITIALIZATION ----------------------------
+units 		metal
+dimension	3
+boundary	s	s	p
+atom_style	atomic
+
+variable a equal 4.3668
+variable b equal 3.571
+variable c equal $a/$b
+
+variable doc equal 5		# depth of cut (Å) = doc × a
+variable wy equal 15		# thickness of workpiece material in y-direction
+
+variable dx equal 70*$c
+variable dy equal (${wy}-${doc})*$c	# ylo of diamond tool
+variable lx equal 31
+variable ly equal 31
+variable dx1 equal ${dx}+${lx}
+variable dy1 equal ${dy}+${ly}
+variable rakeangle equal 15/180*PI
+variable rkshiftX equal -${ly}*tan(${rakeangle})
+variable lr equal 4
+variable rx equal ${dx}+${lr}-${lr}*tan(${rakeangle})
+variable ry equal ${dy}+${lr}
+variable clearangle equal 0.1/180*PI
+variable tx1 equal ${rx}+${lr}*sin(${clearangle})
+variable tx2 equal ${tx1}+${ly}
+variable ty1 equal ${ry}-${lr}*cos(${clearangle})
+variable ty2 equal ${ty1}+${lx}*tan(${clearangle})
+variable bx1 equal ${dx1}-1
+variable bx2 equal ${bx1}-1
+variable by1 equal ${dy1}-1
+variable by2 equal ${by1}-1
+
+lattice fcc $a
+region		whole block 0 99 0 47 0 18
+create_box	3 whole
+
+# ----------------------- ATOM DEFINITION ----------------------------
+
+# create C atoms for diamond tool
+lattice diamond $b orient x 1 0 0 orient y 0 1 0 origin 0 0 0.4
+
+# define the shape, dimension, and initial position of cutting tool
+region cut_toolB block ${dx} ${dx1} ${dy} ${dy1} INF INF 
+region rakeface prism ${dx} ${dx1} ${dy} ${dy1} INF INF  ${rkshiftX} 0 0
+region cut_toolR cylinder z ${rx} ${ry}  4 INF INF
+region trimbox1a block EDGE ${rx} ${dy} ${ry} INF INF side out
+region trimbox1b block EDGE EDGE EDGE ${ty1} INF INF side out
+region cut_toolBR union 2 cut_toolB rakeface
+region cut_toolTr intersect 3 cut_toolBR trimbox1a trimbox1b
+region cut_tool union 2 cut_toolTr cut_toolR
+
+region trimbox2 prism ${tx1} ${tx2} ${ty1} ${ty2} INF INF ${lx} 0 0
+
+#define boundaries of cutting tool
+region ctTop block ${dx} ${dx1} ${by1} ${dy1} INF INF 
+region ctxEnd block ${bx1} ${dx1} ${dy} ${dy1} INF INF
+region ctTSbottom block ${dx} ${bx1} ${by2} ${by1} INF INF
+region ctTSxEnd block ${bx2} ${bx1} ${dy} ${by1} INF INF
+region ctbound union 2 ctTop ctxEnd
+region ctTSbound union 2 ctTSbottom ctTSxEnd 
+
+# create C atoms of diamond tool and make a nano-groove on the flank face
+create_atoms 1 region cut_tool
+
+
+# unit = length of a diamond unit cell
+variable gy equal ${dy}+${grooveDepth}
+variable gz equal 9*$c
+
+region p1 plane 0 ${gy} ${gz} 0 -1 1
+region p2 plane 0 ${gy} ${gz} 0 -1 -1
+#region p3 plane ${dx} 0 0 1 0 0
+region groove intersect 2 p1 p2
+
+delete_atoms region groove
+delete_atoms region trimbox2
+
+group gpCTall region  cut_tool 
+group gpCTbd  region  ctbound 
+group gpCTtsbd  region  ctTSbound 
+group gpCTmob subtract gpCTall gpCTbd gpCTtsbd
+
+
+
+print "diamond tool created"
+#------------------------------------------------------------
+
+# define the lattice of cubic SiC (two atom types form two interpenetrating face-centered cubic lattices)
+
+# define the shape and dimension of the workpiece
+lattice fcc $a origin 0 0 0 orient x 1 0 0 orient y 0 1 0
+
+# define the boundaries for workpiece
+region workpiece block 0 65 0 ${wy} INF INF
+region wpbottom block 0 65 0 1 INF INF
+region wpxEnd block 0 1 0 ${wy} INF INF
+region wpTSbottom block 1 65 1 2 INF INF
+region wpTSxEnd block 1 2 1 ${wy} INF INF
+region wpbound union 2 wpbottom wpxEnd
+region wpTSbound union 2 wpTSbottom wpTSxEnd 
+
+# create Si atoms for SiC workpiece 
+create_atoms	2 region workpiece 
+
+# offset origin for 1/4 unit cell for C atoms
+lattice fcc $a origin 0.25 0.25 0.25 orient x 1 0 0 orient y 0 1 0
+create_atoms	3 region workpiece 
+
+
+# groups atoms
+group gpWPall region workpiece
+group gpWPbd region wpbound
+group gpWPtsbd region wpTSbound
+group gpWPmob subtract gpWPall gpWPbd gpWPtsbd
+
+
+
+
+print "Workpiece created"
+
+#-------------------------------------------------
+
+
+# define the mass of atoms
+mass 1 12 #.0107 # C (g/mol)
+mass 2 28 #.0855 # Si (g/mol)
+mass 3 12 #.0107 # C (g/mol)
+
+#group Si type 2
+#group C type 1 3
+
+lattice fcc $a origin 0 0 0
+
+
+# ------------------------ FORCE FIELDS ------------------------------
+
+#pair_style	atomistica Tersoff
+#pair_coeff	* *  C Si C
+pair_style      atomistica BrennerScr
+pair_coeff	* * C Si C
+
+# pair_style	tersoff 
+# pair_coeff	* * SiC_Erhart-Albe.tersoff C Si C
+
+# ------------------------- SETTINGS ---------------------------------
+######################################
+# EQUILIBRATION
+
+group gpCTeq union gpCTmob gpCTtsbd
+group gpWPeq union gpWPmob gpWPtsbd
+group gpAlleq union gpCTeq gpWPeq
+
+
+compute myCTtemp gpCTeq temp
+compute myWPtemp gpWPeq temp
+velocity gpAlleq create 300 102456 dist uniform
+
+fix 1 gpCTeq nvt temp 300.0 300.0 0.1 # aniso 1.0 1.0 0.5
+fix_modify 1 temp myCTtemp
+fix 2 gpWPeq nvt temp 300.0 300.0 0.1 # aniso 1.0 1.0 0.5
+fix_modify 2 temp myWPtemp
+
+reset_timestep	0
+timestep 0.001 # set 1 femtosecond per step
+
+fix 3 gpWPbd move linear 0 0 0
+fix 4 gpCTbd move linear -0.75 0 0  units box
+
+fix 10 all balance 100 0.9 shift xy 10 1.05 out tmp.balance
+fix 13 all property/atom mol ghost yes
+
+set group gpCTmob mol 1
+set group gpCTtsbd mol 2
+set group gpCTbd mol 3
+
+set group gpWPmob mol 4
+set group gpWPtsbd mol 5
+set group gpWPbd mol 6
+
+
+# Display thermo
+
+thermo 	100
+thermo_style custom step temp c_myCTtemp c_myWPtemp press etotal
+#compute		eCSP all centro/atom fcc
+#compute atomke all ke/atom
+dump	 e0dumpCSP all custom 1000 dump.cutsic_eq.*.lammpstrj id type mol element x y z vx vy vz # c_atomke
+dump_modify e0dumpCSP element C Si C
+
+# backup initial state and every 1000 steps
+write_restart cut_sic_eq.restart.0000
+# restart 1000 cut_sic_eq.restart
+
+
+
+# Run for at least 10 picosecond
+print "start run equilibration"
+
+
+run 27000
+
+unfix 1
+unfix 2
+unfix 3
+unfix 4
+uncompute myCTtemp
+uncompute myWPtemp
+undump e0dumpCSP
+
+######################################
+# DEFORMATION
+
+# move the tool to closer
+
+#displace_atoms gpCTall move -4.9 0 0
+
+reset_timestep	0
+timestep 0.0005
+
+compute myCTmobtemp gpCTmob temp/partial 0 1 1
+compute myWPmobtemp gpWPmob temp/partial 0 1 1
+compute myCTTStemp gpCTtsbd temp
+compute myWPTStemp gpWPtsbd temp/partial 0 1 1
+
+# rescale the temperature of thermostatic boundaries to 300 K
+
+fix 1 gpWPtsbd nvt temp 300.0 300.0 0.01 #iso 1.0 1.0 0.5
+fix_modify 1 temp myWPTStemp
+fix 2 gpCTtsbd nvt temp 300.0 300.0 0.01 #iso 1.0 1.0 0.5
+fix_modify 2 temp myCTTStemp
+
+fix 3 gpWPbd move linear 0 0 0
+fix 4 gpCTbd move linear -$v 0 0 units box  # cutting speed = v * 100 (m s^-1 in the x-direction)
+
+group mobile union gpCTmob gpWPmob
+
+fix 5 mobile nve
+
+compute ke all ke/atom
+fix 12 all ave/atom 10 50 500 c_ke
+
+thermo 	500
+thermo_style custom step c_myCTmobtemp c_myCTTStemp c_myWPmobtemp c_myWPTStemp press etotal fmax fnorm
+
+
+# Output strain and stress info to file
+# for units metal, pressure is in [bars] = 100 [kPa] = 1/10000 [GPa]
+# p2, p3, p4 are in GPa
+
+## Use cfg for AtomEye
+#dump 		1 all cfg 2000 dump.cutsic_*.cfg id type xs ys zs c_csym
+
+# backup initial state and every 1000 steps
+write_restart cut_sic.restart.0000
+restart 1000 cut_sic.restart
+
+# Display thermo
+dump	 0dumpCSP all custom  500 dump.cutsic.*.lammpstrj id type mol x y z vx vy vz f_12
+dump_modify 0dumpCSP element C Si C
+
+#write_restart cut_sic.restart.0000
+#restart 1000 cut_sic.restart
+
+reset_timestep	0
+variable Nstep equal ceil(400000/$v)
+ run ${Nstep}
+
+
+######################################
+# SIMULATION DONE
+print "All done" 
+shell echo "Cutting simulation has completed -- ${respath}" | mail -s "LAMMPS - simulation done" chris-fung1125@hotmail.com
+shell curl -u v1xLeCC9qPNypWqVabP5ydNPIv94Kuo9guujz7K8nZUaq: https://api.pushbullet.com/v2/pushes -d type=note -d device_iden="ujz7K8nZUaqsjAgWOzmngO" -d title="Push from KhrisU" -d body="LAMMPS -- Simulation is finish"
+
